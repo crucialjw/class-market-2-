@@ -2664,6 +2664,9 @@ button:disabled,[aria-disabled="true"]{cursor:not-allowed}
 </div>
 <a class="back" href="#store" id="pin-back">학생 화면으로 돌아가기</a>
 </div></div>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="cloud-config.js"></script>
 <script id="app-data">/* 꿈자람 학급 매점 — 공용 데이터 저장소 + 화면 연결 (학생 매점 · 보상 통장 · 교사 대시보드 · 상점 관리) */
 (function () {
   'use strict';
@@ -2712,7 +2715,7 @@ button:disabled,[aria-disabled="true"]{cursor:not-allowed}
   /* ---------- 저장소 ---------- */
   function load() { try { var s = localStorage.getItem(KEY); if (s) { var d = JSON.parse(s); if (d && d.v === 1) return d; } } catch (e) {} return null; }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(DB)); } catch (e) {} }
-  function commit() { save(); renderAll(); }
+  function commit(force) { save(); renderAll(); if (typeof cloudPush === 'function') cloudPush(force === true); }
 
   function seedDB() {
     var now = Date.now(), t0 = dayStart(now);
@@ -2788,7 +2791,7 @@ button:disabled,[aria-disabled="true"]{cursor:not-allowed}
   }
   function addTx(sid, type, cat, title, sub, delta, icon, oid) {
     var s = S(sid);
-    var t = { id: 't' + (++DB.seq.t), sid: sid, type: type, cat: cat, title: title, sub: sub || '', delta: delta, bal: s.pts, at: Date.now(), icon: icon || '', oid: oid || null };
+    var t = { id: 't' + uid(), sid: sid, type: type, cat: cat, title: title, sub: sub || '', delta: delta, bal: s.pts, at: Date.now(), icon: icon || '', oid: oid || null };
     DB.tx.push(t); return t;
   }
   function award(sid, delta, cat, title, sub, icon) {
@@ -2975,7 +2978,7 @@ button:disabled,[aria-disabled="true"]{cursor:not-allowed}
     }
     if (total > s.pts) { showToast('포인트가 부족해요!', 'error'); return; }
     if (DB.limitOn && total > 200) { showToast('한 번에 200P까지만 신청할 수 있어요.', 'error'); return; }
-    var o = { id: 'o' + (++DB.seq.o), sid: s.id, items: items, total: total, status: 'pending', at: Date.now(), memo: '' };
+    var o = { id: 'o' + uid(), sid: s.id, items: items, total: total, status: 'pending', at: Date.now(), memo: '' };
     DB.orders.push(o);
     s.pts -= total; s.spent += total;
     items.forEach(function (it) { var pp = P(it.pid); if (pp.stock != null) pp.stock -= it.qty; });
@@ -3307,7 +3310,7 @@ button:disabled,[aria-disabled="true"]{cursor:not-allowed}
       p.cat = cat; p.title = name; p.points = pts; p.desc = F.desc.value.trim() || p.desc; p.stock = stock; p.limit = F.limit.value;
       if (catChanged) { p.icon = CAT[cat].def; }
     } else {
-      DB.products.push({ id: 'p' + (++DB.seq.p), cat: cat, title: name, desc: F.desc.value.trim() || '선생님이 준비한 보상이에요!', badge: '새로 나왔어요', tone: 'mint', points: pts, stock: stock, img: '', icon: CAT[cat].def, limit: F.limit.value, active: true });
+      DB.products.push({ id: 'p' + uid(), cat: cat, title: name, desc: F.desc.value.trim() || '선생님이 준비한 보상이에요!', badge: '새로 나왔어요', tone: 'mint', points: pts, stock: stock, img: '', icon: CAT[cat].def, limit: F.limit.value, active: true });
     }
     closeForm(); commit();
     showToast(p ? '\'' + name + '\' 상품이 수정되었습니다.' : '새 보상 품목이 성공적으로 등록되었습니다!');
@@ -3344,7 +3347,7 @@ button:disabled,[aria-disabled="true"]{cursor:not-allowed}
       r.textContent = '샘플 데이터로 되돌리기';
       r.addEventListener('click', function () {
         if (!resetArmed) { resetArmed = true; r.textContent = '한 번 더 누르면 모든 기록이 지워져요'; setTimeout(function () { resetArmed = false; r.textContent = '샘플 데이터로 되돌리기'; }, 3500); return; }
-        resetArmed = false; DB = seedDB(); cart = []; selected.clear(); commit(); r.textContent = '샘플 데이터로 되돌리기'; showToast('샘플 데이터로 되돌렸어요.');
+        resetArmed = false; DB = seedDB(); cart = []; selected.clear(); commit(true); r.textContent = '샘플 데이터로 되돌리기'; showToast('샘플 데이터로 되돌렸어요.');
       });
       box.appendChild(r);
     }
@@ -3498,7 +3501,7 @@ button:disabled,[aria-disabled="true"]{cursor:not-allowed}
     DB.orders = []; DB.tx = []; DB.bonus = {}; DB.seq.o = 0; DB.seq.t = 0; DB.seq.pickup = 0;
     cart = []; selected.clear();
     var m = $('roster-modal'); if (m) m.style.display = 'none';
-    commit(); showToast('새 학기로 시작해요! 모든 포인트와 기록을 비웠어요.');
+    commit(true); showToast('새 학기로 시작해요! 모든 포인트와 기록을 비웠어요.');
   }
   var zeroArmed = false;
   function zeroAll(btn) {
@@ -3558,9 +3561,217 @@ button:disabled,[aria-disabled="true"]{cursor:not-allowed}
     b.after(z);
   }
 
+  /* ---------- 클라우드 연동 (Firebase Firestore, 선택 사항) ---------- */
+  var CKEY = 'kkumjaram.cloud';
+  var CLOUD = { on: false, db: null, ref: null, code: '', status: 'local', base: null, lastStr: '', pushing: false, again: false, force: false, timer: null, retry: null, unsub: null };
+  var CNT = { students: ['pts', 'earned', 'spent'], products: ['stock'] };
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+  function J(o) { return JSON.stringify(o); }
+  function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+  function mergeRecords(kind, B, L, R) {
+    var bm = {}, lm = {}, rm = {}, ids = [], seen = {}, out = [], cnt = CNT[kind] || [];
+    B.forEach(function (x) { bm[x.id] = x; }); L.forEach(function (x) { lm[x.id] = x; }); R.forEach(function (x) { rm[x.id] = x; });
+    R.forEach(function (x) { ids.push(x.id); seen[x.id] = 1; });
+    L.forEach(function (x) { if (!seen[x.id]) { ids.push(x.id); seen[x.id] = 1; } });
+    ids.forEach(function (id) {
+      var b = bm[id], l = lm[id], r = rm[id];
+      if (!l) { if (!b) out.push(r); return; }                 // 내가 지운 것은 지운 채로
+      if (!b) { out.push(l); return; }                         // 내가 새로 만든 것
+      if (!r) return;                                          // 다른 기기에서 지운 것
+      if (J(l) === J(b)) { out.push(r); return; }              // 나는 안 바꿈 → 최신 값
+      var m = clone(r);
+      Object.keys(l).forEach(function (k) {
+        if (J(l[k]) === J(b[k])) return;
+        if (cnt.indexOf(k) >= 0 && typeof l[k] === 'number') m[k] = (Number(r[k]) || 0) + (l[k] - (Number(b[k]) || 0));   // 포인트·재고는 증감분만 합침
+        else m[k] = l[k];
+      });
+      out.push(m);
+    });
+    return out;
+  }
+  function mergeDB(base, local, remote) {
+    var m = clone(remote);
+    m.students = mergeRecords('students', base.students, local.students, remote.students).sort(function (a, b) { return a.no - b.no; });
+    m.products = mergeRecords('products', base.products, local.products, remote.products);
+    m.orders = mergeRecords('orders', base.orders, local.orders, remote.orders);
+    // 같은 요청을 두 기기에서 동시에 처리한 경우: 먼저 처리된 결과를 따르고, 내 환불은 되돌림
+    var rm = {}, bm = {}, lm = {};
+    remote.orders.forEach(function (o) { rm[o.id] = o; }); base.orders.forEach(function (o) { bm[o.id] = o; }); local.orders.forEach(function (o) { lm[o.id] = o; });
+    var REF = { rejected: 1, cancelled: 1 }, undone = {};
+    m.orders.forEach(function (o) {
+      var b = bm[o.id], l = lm[o.id], r = rm[o.id];
+      if (!(b && l && r && b.status === 'pending' && l.status !== 'pending' && r.status !== 'pending' && l.status !== r.status)) return;
+      o.status = r.status; o.decidedAt = r.decidedAt; o.pickup = r.pickup;
+      if (REF[l.status]) {
+        undone[o.id] = 1;
+        var s = m.students.filter(function (x) { return x.id === o.sid; })[0];
+        if (s) { s.pts -= l.total; s.spent += l.total; }
+        l.items.forEach(function (i) { var p = m.products.filter(function (x) { return x.id === i.pid; })[0]; if (p && p.stock != null) p.stock -= i.qty; });
+      }
+    });
+    var inBase = {}, inRemote = {};
+    base.tx.forEach(function (t) { inBase[t.id] = 1; }); remote.tx.forEach(function (t) { inRemote[t.id] = 1; });
+    local.tx.forEach(function (t) { if (!inBase[t.id] && !inRemote[t.id] && !(t.oid && undone[t.oid] && t.cat === '환불')) m.tx.push(t); });
+    ['notice', 'snackLock', 'classLock', 'limitOn'].forEach(function (k) { if (J(local[k]) !== J(base[k])) m[k] = local[k]; });
+    m.bonus = Object.assign({}, remote.bonus || {}, local.bonus || {});
+    m.seq = {}; Object.keys(remote.seq || {}).concat(Object.keys(local.seq || {})).forEach(function (k) { m.seq[k] = Math.max((remote.seq || {})[k] || 0, (local.seq || {})[k] || 0); });
+    m.currentId = local.currentId;
+    if (!m.students.some(function (s) { return s.id === m.currentId; }) && m.students.length) m.currentId = m.students[0].id;
+    return m;
+  }
+  function cloudStatus(s) {
+    CLOUD.status = s;
+    var chip = $('cloud-chip'); if (!chip) return;
+    var T = { off: ['cloud_off', '클라우드 연결 안 됨', false], ok: ['cloud_done', '클라우드 연결됨', true], sync: ['sync', '동기화 중…', true], offline: ['cloud_off', '오프라인 · 연결되면 자동 저장', false] };
+    var v = T[s] || T.off;
+    chip.innerHTML = '<span class="material-symbols-outlined text-[16px]" aria-hidden="true">' + v[0] + '</span><span>' + v[1] + '</span>';
+    chip.className = 'fixed left-3 bottom-3 z-40 px-3 py-1.5 rounded-full shadow-md font-label-sm text-label-sm font-bold flex items-center gap-1.5 ' + (v[2] ? 'bg-mint-soft text-primary' : 'bg-surface-container-highest text-on-surface-variant');
+  }
+  function cloudPush(force) {
+    if (!CLOUD.on) return;
+    if (force) CLOUD.force = true;
+    clearTimeout(CLOUD.timer); CLOUD.timer = setTimeout(pushNow, CLOUD.force ? 0 : 350);
+  }
+  function pushNow() {
+    if (!CLOUD.on) return;
+    if (CLOUD.pushing) { CLOUD.again = true; return; }
+    CLOUD.pushing = true; cloudStatus('sync');
+    var snap0 = clone(DB), force = CLOUD.force, p; CLOUD.force = false;
+    if (force) p = CLOUD.ref.set({ d: J(snap0), t: Date.now() }).then(function () { return snap0; });
+    else p = CLOUD.db.runTransaction(function (tx) {
+      return tx.get(CLOUD.ref).then(function (s) {
+        var remote = s.exists ? JSON.parse(s.data().d) : null;
+        var merged = remote && CLOUD.base ? mergeDB(CLOUD.base, snap0, remote) : clone(snap0);
+        tx.set(CLOUD.ref, { d: J(merged), t: Date.now() });
+        return merged;
+      });
+    });
+    p.then(function (merged) {
+      CLOUD.pushing = false; CLOUD.lastStr = J(merged); CLOUD.base = clone(merged);
+      var cur = J(DB) !== J(snap0) ? mergeDB(snap0, DB, merged) : clone(merged);
+      cur.currentId = DB.currentId;
+      var changed = J(cur) !== J(DB); DB = cur; save(); if (changed) renderAll();
+      cloudStatus('ok');
+      if (CLOUD.again || J(cur) !== J(merged)) { CLOUD.again = false; cloudPush(); }
+    }).catch(function (e) {
+      CLOUD.pushing = false; cloudStatus('offline');
+      if (window.console) console.warn('cloud push', e && e.message);
+      clearTimeout(CLOUD.retry); CLOUD.retry = setTimeout(pushNow, 8000);
+    });
+  }
+  function adoptRemote(remote) {
+    var keep = DB && DB.currentId;
+    if (CLOUD.base && J(DB) !== J(CLOUD.base)) { DB = mergeDB(CLOUD.base, DB, remote); cloudPush(); }
+    else { DB = remote; if (keep != null && S(keep)) DB.currentId = keep; else if (DB.students.length) DB.currentId = DB.students[0].id; }
+    CLOUD.base = clone(remote); CLOUD.lastStr = J(remote); save(); renderAll();
+  }
+  function listen() {
+    if (CLOUD.unsub) { try { CLOUD.unsub(); } catch (e) {} }
+    CLOUD.unsub = CLOUD.ref.onSnapshot(function (snap) {
+      if (!snap.exists || (snap.metadata && snap.metadata.hasPendingWrites)) return;
+      var str = snap.data().d;
+      if (str === CLOUD.lastStr || CLOUD.pushing) return;
+      try { adoptRemote(JSON.parse(str)); cloudStatus('ok'); } catch (e) { if (window.console) console.error('cloud adopt', e); }
+    }, function () { cloudStatus('offline'); });
+  }
+  function cloudConnect(code, create) {
+    if (!window.firebase || !window.CLOUD_CONFIG) return Promise.reject(new Error('no-cloud'));
+    if (!CLOUD.db) {
+      if (!firebase.apps || !firebase.apps.length) firebase.initializeApp(window.CLOUD_CONFIG);
+      CLOUD.db = firebase.firestore();
+    }
+    var ref = CLOUD.db.collection('classes').doc(code);
+    cloudStatus('sync');
+    return ref.get().then(function (snap) {
+      if (!snap.exists && !create) { var er = new Error('missing'); er.code = 'missing'; throw er; }
+      CLOUD.ref = ref; CLOUD.code = code; CLOUD.on = true;
+      try { localStorage.setItem(CKEY, JSON.stringify({ code: code })); } catch (e) {}
+      if (snap.exists) {
+        try { localStorage.setItem(KEY + '.backup', J(DB)); } catch (e) {}
+        CLOUD.base = null; adoptRemote(JSON.parse(snap.data().d));
+        cloudStatus('ok');
+      } else {
+        CLOUD.base = null; CLOUD.force = true; pushNow();
+      }
+      listen();
+      window.addEventListener('online', function () { if (CLOUD.on) pushNow(); });
+    });
+  }
+  function cloudDisconnect() {
+    if (CLOUD.unsub) { try { CLOUD.unsub(); } catch (e) {} CLOUD.unsub = null; }
+    clearTimeout(CLOUD.timer); clearTimeout(CLOUD.retry);
+    CLOUD.on = false; CLOUD.code = ''; CLOUD.base = null; CLOUD.ref = null;
+    try { localStorage.removeItem(CKEY); } catch (e) {}
+    cloudStatus('off');
+  }
+  function newCode() {
+    var A = 'abcdefghjkmnpqrstuvwxyz23456789', s = '', a = new Uint8Array(24);
+    (window.crypto || { getRandomValues: function (x) { for (var i = 0; i < x.length; i++) x[i] = Math.floor(Math.random() * 256); } }).getRandomValues(a);
+    for (var i = 0; i < 24; i++) s += A.charAt(a[i] % A.length);
+    return s;
+  }
+  function shareLink() { return location.origin + location.pathname + '?c=' + CLOUD.code; }
+  function copyText(t, msg) {
+    var done = function () { showToast(msg); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(done, function () { window.prompt('복사해서 사용하세요', t); });
+    else window.prompt('복사해서 사용하세요', t);
+  }
+  function cloudDialog() {
+    var m = $('cloud-modal');
+    if (!m) {
+      m = document.createElement('div'); m.id = 'cloud-modal';
+      m.className = 'fixed inset-0 z-50 bg-inverse-surface/60 flex items-center justify-center p-3';
+      m.setAttribute('role', 'dialog'); m.setAttribute('aria-modal', 'true'); m.setAttribute('aria-labelledby', 'cloud-title');
+      document.body.appendChild(m);
+      m.addEventListener('keydown', function (e) { if (e.key === 'Escape') m.style.display = 'none'; });
+      m.addEventListener('click', function (e) {
+        if (e.target === m) { m.style.display = 'none'; return; }
+        var b = e.target.closest && e.target.closest('[data-c]'); if (!b) return;
+        var a = b.getAttribute('data-c');
+        if (a === 'close') m.style.display = 'none';
+        else if (a === 'create') cloudConnect(newCode(), true).then(function () { cloudDialog(); showToast('학급 클라우드를 만들었어요. 공유 링크를 다른 기기에서 열어 주세요.'); }, function () { showToast('연결하지 못했어요. 인터넷을 확인해 주세요.', 'error'); });
+        else if (a === 'join') {
+          var code = ($('cloud-code').value || '').trim();
+          if (code.length < 20) { showToast('학급 코드를 정확히 입력해 주세요.', 'error'); return; }
+          cloudConnect(code, false).then(function () { cloudDialog(); showToast('학급 데이터를 불러왔어요.'); }, function (er) { showToast(er && er.code === 'missing' ? '해당 학급 코드를 찾을 수 없어요.' : '연결하지 못했어요. 인터넷을 확인해 주세요.', 'error'); });
+        }
+        else if (a === 'link') copyText(shareLink(), '공유 링크를 복사했어요.');
+        else if (a === 'copy') copyText(CLOUD.code, '학급 코드를 복사했어요.');
+        else if (a === 'off') { if (b.getAttribute('data-armed')) { cloudDisconnect(); cloudDialog(); showToast('연결을 해제했어요. 이 기기의 데이터는 그대로 남아 있어요.'); } else { b.setAttribute('data-armed', '1'); b.textContent = '정말 해제할까요? 한 번 더 누르세요'; } }
+      });
+    }
+    var INP2 = 'w-full rounded-DEFAULT bg-surface-container-low px-2.5 py-2 font-body-sm text-body-sm text-on-surface border border-outline-variant';
+    var BTN = 'px-3 py-2 rounded-full font-label-md text-label-md font-bold ';
+    m.innerHTML = '<div class="bg-surface-container-lowest rounded-lg shadow-xl w-full max-w-md flex flex-col gap-space-sm p-space-sm" style="max-height:92vh;overflow:auto">' +
+      '<div class="flex items-start justify-between gap-3"><div><h3 id="cloud-title" class="font-headline-sm text-headline-sm font-extrabold text-on-surface">클라우드 연동</h3><p class="font-body-sm text-body-sm text-on-surface-variant">같은 학급 코드를 쓰는 모든 기기가 같은 데이터를 봐요.</p></div><button type="button" data-c="close" class="w-9 h-9 rounded-full hover:bg-surface-container flex items-center justify-center shrink-0" aria-label="닫기"><span class="material-symbols-outlined" aria-hidden="true">close</span></button></div>' +
+      (CLOUD.on ?
+        '<div class="rounded-DEFAULT bg-surface-container-low p-space-sm flex flex-col gap-2"><span class="font-label-sm text-label-sm text-on-surface-variant font-bold">학급 코드 (다른 사람에게 알려주지 마세요)</span><code class="break-all font-label-md text-label-md text-on-surface">' + esc(CLOUD.code) + '</code></div>' +
+        '<div class="flex flex-wrap gap-2"><button type="button" data-c="link" class="' + BTN + 'bg-primary-container text-on-primary">공유 링크 복사</button><button type="button" data-c="copy" class="' + BTN + 'bg-surface-container text-on-surface">코드만 복사</button></div>' +
+        '<p class="font-body-sm text-body-sm text-on-surface-variant">다른 태블릿·폰에서 <b>공유 링크</b>를 열면 자동으로 연결돼요. 링크를 아는 사람은 누구나 이 학급 데이터를 볼 수 있으니 학생·학부모 단체방에 올리지 마세요.</p>' +
+        '<button type="button" data-c="off" class="' + BTN + 'self-start bg-surface-container text-error">이 기기에서 연결 해제</button>'
+      :
+        '<div class="rounded-DEFAULT bg-surface-container-low p-space-sm flex flex-col gap-2"><span class="font-label-md text-label-md font-bold text-on-surface">처음이라면</span><p class="font-body-sm text-body-sm text-on-surface-variant">이 기기의 현재 데이터(이름·포인트)를 클라우드에 올리고 새 학급 코드를 만들어요.</p><button type="button" data-c="create" class="' + BTN + 'self-start bg-primary-container text-on-primary">새 학급 만들기</button></div>' +
+        '<div class="rounded-DEFAULT bg-surface-container-low p-space-sm flex flex-col gap-2"><label for="cloud-code" class="font-label-md text-label-md font-bold text-on-surface">이미 학급 코드가 있다면</label><input id="cloud-code" class="' + INP2 + '" placeholder="학급 코드 붙여넣기" autocomplete="off" autocapitalize="off"/><p class="font-body-sm text-body-sm text-on-surface-variant">이 기기의 기존 데이터는 클라우드 데이터로 바뀌어요.</p><button type="button" data-c="join" class="' + BTN + 'self-start bg-surface-container text-on-surface">연결하기</button></div>') +
+      '</div>';
+    m.style.display = 'flex';
+    var f = m.querySelector('[data-c="create"],[data-c="link"]'); if (f) f.focus();
+  }
+  function cloudInit() {
+    if (!window.firebase || !window.CLOUD_CONFIG || !window.CLOUD_CONFIG.projectId) return;
+    var chip = document.createElement('button'); chip.id = 'cloud-chip'; chip.type = 'button'; chip.addEventListener('click', cloudDialog);
+    document.body.appendChild(chip); cloudStatus('off');
+    var urlCode = null, saved = null;
+    try { urlCode = new URLSearchParams(location.search).get('c'); } catch (e) {}
+    try { saved = (JSON.parse(localStorage.getItem(CKEY) || 'null') || {}).code; } catch (e) {}
+    var code = urlCode || saved;
+    if (urlCode) { try { history.replaceState(null, '', location.pathname + location.hash); } catch (e) {} }
+    if (code && code.length >= 20) cloudConnect(code, false).then(function () { if (urlCode && urlCode !== saved) showToast('학급 데이터에 연결했어요.'); }, function (er) { cloudStatus(er && er.code === 'missing' ? 'off' : 'offline'); if (er && er.code === 'missing') { try { localStorage.removeItem(CKEY); } catch (e) {} showToast('학급 코드를 찾을 수 없어요.', 'error'); } else { CLOUD.code = code; } });
+  }
+
   /* ---------- 시작 ---------- */
   DB = load() || seedDB();
-  window.addEventListener('storage', function (e) { if (e.key === KEY) { var d = load(); if (d) { DB = d; renderAll(); } } });
+  window.addEventListener('storage', function (e) { if (e.key === KEY && !CLOUD.on) { var d = load(); if (d) { DB = d; renderAll(); } } });
   var api = { switchStudentModal: switchStudentModal, closeStudentModal: closeStudentModal, selectStudent: selectStudent, setCategory: setCategory, filterItems: filterItems,
     addToCart: addToCart, removeFromCart: removeFromCart, changeQty: changeQty, submitOrderRequest: submitOrderRequest, closeSuccessModal: closeSuccessModal, useCoupon: useCoupon,
     filterTransactions: filterTransactions, cancelOrder: cancelOrder, showBarcode: showBarcode,
@@ -3568,7 +3779,8 @@ button:disabled,[aria-disabled="true"]{cursor:not-allowed}
     approveRequest: approveRequest, rejectRequest: rejectRequest, approveAllRequests: approveAllRequests, setSnackLock: setSnackLock, showToast: showToast };
   Object.keys(api).forEach(function (k) { window[k] = api[k]; });
   window.openRoster = rosterOpen;
-  window.__app = { renderAll: renderAll, db: function () { return DB; }, reseed: function () { DB = seedDB(); commit(); } };
+  cloudInit();
+  window.__app = { renderAll: renderAll, db: function () { return DB; }, reseed: function () { DB = seedDB(); commit(true); }, cloud: function () { return CLOUD; } };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', renderAll); else renderAll();
 })();
 </script>
