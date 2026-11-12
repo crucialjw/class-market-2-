@@ -2666,7 +2666,7 @@ button:disabled,[aria-disabled="true"]{cursor:not-allowed}
 </div></div>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="cloud-config.js?v=1794463656"></script>
+<script src="cloud-config.js?v=1794479135"></script>
 <script id="app-data">/* 꿈자람 학급 매점 — 공용 데이터 저장소 + 화면 연결 (학생 매점 · 보상 통장 · 교사 대시보드 · 상점 관리) */
 (function () {
   'use strict';
@@ -3793,15 +3793,14 @@ button:disabled,[aria-disabled="true"]{cursor:not-allowed}
 </script>
 <script>
 (function(){
-  var PIN='8888'; /* 선생님 비밀번호는 여기서 바꾸세요 */
+  var PIN='3690'; /* 선생님 비밀번호는 여기서 바꾸세요 */
   var V=['store','bank','teacher','admin'], LOCK={teacher:1,admin:1}, T={"store": "학급 매점", "bank": "내 보상 통장", "teacher": "교사 대시보드", "admin": "상점 & 재고 관리"}, cur='store', want=null;
   var ACT='bg-primary-container text-on-primary font-bold shadow-sm'.split(' ');
   var IDLE='font-label-md text-label-md text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'.split(' ');
   var MA='bg-surface-card text-primary font-bold shadow-sm'.split(' '), MI='text-on-surface-variant hover:text-on-surface'.split(' ');
   var gate=document.getElementById('pin-gate'), dots=document.querySelectorAll('#pin-dots i'), msg=document.getElementById('pin-msg'),
       box=document.getElementById('pin-box'), pad=document.getElementById('pin-pad'), buf='', fails=0, locked=false;
-  function ok(){try{return sessionStorage.getItem('teacherPinOk')==='1'}catch(e){return false}}
-  function remember(){try{sessionStorage.setItem('teacherPinOk','1')}catch(e){}}
+  var unlocked='';
   function swap(el,on,off){off.forEach(function(c){el.classList.remove(c)});on.forEach(function(c){el.classList.add(c)})}
   function show(v){
     cur=v;if(window.__app)window.__app.renderAll();
@@ -3816,7 +3815,8 @@ button:disabled,[aria-disabled="true"]{cursor:not-allowed}
   function closeGate(){gate.classList.remove('open');gate.setAttribute('aria-hidden','true')}
   function go(v){
     if(V.indexOf(v)<0)return;
-    if(LOCK[v]&&!ok()){want=v;openGate();return}
+    if(LOCK[v]&&unlocked!==v){want=v;openGate();return}
+    if(!LOCK[v])unlocked='';
     closeGate();show(v);
   }
   function paint(){dots.forEach(function(d,i){d.classList.toggle('on',i<buf.length)})}
@@ -3831,7 +3831,7 @@ button:disabled,[aria-disabled="true"]{cursor:not-allowed}
     if(locked)return;msg.textContent='';
     if(k==='del'){buf=buf.slice(0,-1);paint();return}
     if(buf.length>=4)return;buf+=k;paint();
-    if(buf.length===4){if(buf===PIN){remember();fails=0;var w=want||'teacher';want=null;go(w)}else setTimeout(fail,120)}
+    if(buf.length===4){if(buf===PIN){fails=0;var w=want||'teacher';want=null;unlocked=w;go(w)}else setTimeout(fail,120)}
   }
   function cancel(){want=null;closeGate();show(cur)}
   pad.addEventListener('click',function(e){var b=e.target.closest('button[data-k]');if(b)press(b.getAttribute('data-k'))});
