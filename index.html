@@ -2666,7 +2666,7 @@ button:disabled,[aria-disabled="true"]{cursor:not-allowed}
 </div></div>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="cloud-config.js"></script>
+<script src="cloud-config.js?v=1794463656"></script>
 <script id="app-data">/* 꿈자람 학급 매점 — 공용 데이터 저장소 + 화면 연결 (학생 매점 · 보상 통장 · 교사 대시보드 · 상점 관리) */
 (function () {
   'use strict';
@@ -3758,9 +3758,16 @@ button:disabled,[aria-disabled="true"]{cursor:not-allowed}
     var f = m.querySelector('[data-c="create"],[data-c="link"]'); if (f) f.focus();
   }
   function cloudInit() {
-    if (!window.firebase || !window.CLOUD_CONFIG || !window.CLOUD_CONFIG.projectId) return;
-    var chip = document.createElement('button'); chip.id = 'cloud-chip'; chip.type = 'button'; chip.addEventListener('click', cloudDialog);
-    document.body.appendChild(chip); cloudStatus('off');
+    if (!window.CLOUD_CONFIG || !window.CLOUD_CONFIG.projectId) return;
+    var chip = document.createElement('button'); chip.id = 'cloud-chip'; chip.type = 'button';
+    document.body.appendChild(chip);
+    if (!window.firebase) {
+      cloudStatus('off');
+      chip.innerHTML = '<span class="material-symbols-outlined text-[16px]" aria-hidden="true">error</span><span>클라우드 도구를 불러오지 못했어요</span>';
+      chip.addEventListener('click', function () { showToast('인터넷 연결이나 학교 네트워크(구글 서버 차단)를 확인하고 새로고침해 주세요.', 'error'); });
+      return;
+    }
+    chip.addEventListener('click', cloudDialog); cloudStatus('off');
     var urlCode = null, saved = null;
     try { urlCode = new URLSearchParams(location.search).get('c'); } catch (e) {}
     try { saved = (JSON.parse(localStorage.getItem(CKEY) || 'null') || {}).code; } catch (e) {}
