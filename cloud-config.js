@@ -10,4 +10,12 @@
 //   messagingSenderId: "...",
 //   appId: "..."
 // };
-window.CLOUD_CONFIG = null;
+
+window.CLOUD_CONFIG = {
+//   apiKey: "AIzaSyAM63voYgoNNMobWRPG3b7kq5P60P2hpTk",
+//   authDomain: "class-market-7f7ca.firebaseapp.com",
+//   projectId: "class-market-7f7ca",
+//   storageBucket: "class-market-7f7ca.firebasestorage.app",
+//   messagingSenderId: "688441718408",
+//   appId: "1:688441718408:web:2689784da47a7a3b16113d"
+// };
